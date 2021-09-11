@@ -735,7 +735,7 @@ static const VSFrame *VS_CC readGetFrame(int n, int activationReason, void *inst
             if (d->embedICC) {
                 const MagickCore::StringInfo *icc_profile = MagickCore::GetImageProfile(image.constImage(), "icc");
                 if (icc_profile) {
-                    vsapi->mapSetData(vsapi->getFramePropertiesRW(frame), "_ICCProfile", reinterpret_cast<const char *>(icc_profile->datum), icc_profile->length, dtBinary, maReplace);
+                    vsapi->mapSetData(vsapi->getFramePropertiesRW(frame), "ICCProfile", reinterpret_cast<const char *>(icc_profile->datum), icc_profile->length, dtBinary, maReplace);
                 }
             }
 #endif
