@@ -37,12 +37,11 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include "../../common/vsutf16.h"
-#include "../../core/filtershared.h"
+#include "vsutf16.h"
 #else
 #include <unistd.h>
 #endif
-#include "../../core/version.h"
+
 
 // Handle both with and without hdri
 #if MAGICKCORE_HDRI_ENABLE
@@ -840,7 +839,7 @@ static void VS_CC readCreate(const VSMap *in, VSMap *out, void *userData, VSCore
 // Init
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI *vspapi) {
-    vspapi->configPlugin(IMWRI_ID, IMWRI_NAMESPACE, IMWRI_PLUGIN_NAME, VAPOURSYNTH_INTERNAL_PLUGIN_VERSION, VAPOURSYNTH_API_VERSION, 0, plugin);
+    vspapi->configPlugin(IMWRI_ID, IMWRI_NAMESPACE, IMWRI_PLUGIN_NAME, VS_MAKE_VERSION(1, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
     vspapi->registerFunction("Write", "clip:vnode;imgformat:data;filename:data;firstnum:int:opt;quality:int:opt;dither:int:opt;compression_type:data:opt;overwrite:int:opt;alpha:clip:opt;", "clip:vnode;", writeCreate, nullptr, plugin);
     vspapi->registerFunction("Read", "filename:data[];firstnum:int:opt;mismatch:int:opt;alpha:int:opt;float_output:int:opt;embed_icc:int:opt;", "clip:vnode;", readCreate, nullptr, plugin);
 }
