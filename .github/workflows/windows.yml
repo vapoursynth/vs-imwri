@@ -1,0 +1,105 @@
+name: Windows
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    strategy:
+      matrix:
+        include:
+          - { sys: mingw32, env: i686 }
+          - { sys: mingw64, env: x86_64 }
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+
+    - name: Setup MSYS2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: ${{matrix.sys}}
+        update: true
+        install: >-
+          base-devel
+          git
+          mingw-w64-${{matrix.env}}-aom
+          mingw-w64-${{matrix.env}}-cmake
+          mingw-w64-${{matrix.env}}-lcms2
+          mingw-w64-${{matrix.env}}-libde265
+          mingw-w64-${{matrix.env}}-meson
+          mingw-w64-${{matrix.env}}-toolchain
+          mingw-w64-${{matrix.env}}-zimg
+
+    - name: Install VapourSynth
+      run: |
+        git clone https://github.com/vapoursynth/vapoursynth.git --depth 1
+        pushd vapoursynth
+        ./autogen.sh
+        ./configure --disable-vsscript --disable-vspipe --disable-python-module
+        make install -j2
+        popd
+        rm -rf vapoursynth
+
+    - name: Install Imath
+      run: |
+        git clone https://github.com/AcademySoftwareFoundation/Imath.git --depth 1
+        pushd Imath
+        cmake -S . -B building -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/${{matrix.sys}} -DIMATH_INSTALL_PKG_CONFIG=ON -G Ninja
+        ninja -C building install
+        popd
+        rm -rf Imath
+
+    - name: Install libheif
+      run: |
+        git clone https://github.com/strukturag/libheif.git --depth 1
+        pushd libheif
+        ./autogen.sh
+        ./configure --disable-shared --disable-examples --disable-x265 --disable-rav1e
+        make install -j2
+        popd
+        rm -rf libheif
+        cp /${{matrix.sys}}/include/libheif/heif.h /${{matrix.sys}}/include/heif.h
+
+    - name: Install libtiff
+      run: |
+        git clone https://gitlab.com/libtiff/libtiff.git --depth 1
+        pushd libtiff
+        cmake -S . -B building -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/${{matrix.sys}} -Dlerc=OFF -G Ninja
+        ninja -C building install
+        popd
+        rm -rf libtiff
+
+    - name: Install OpenEXR
+      run: |
+        git clone https://github.com/AcademySoftwareFoundation/openexr.git --depth 1
+        pushd openexr
+        cmake -S . -B building -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/${{matrix.sys}} -DOPENEXR_BUILD_TOOLS=OFF -DOPENEXR_INSTALL_EXAMPLES=OFF -DOPENEXR_INSTALL_PKG_CONFIG=ON -DOPENEXR_INSTALL_TOOLS=OFF -G Ninja
+        ninja -C building install
+        popd
+        rm -rf openexr
+
+    - name: Install ImageMagick
+      run: |
+        git clone https://github.com/ImageMagick/ImageMagick.git --depth 1
+        pushd ImageMagick
+        ./configure --prefix=/${{matrix.sys}} --disable-shared --enable-hdri --disable-docs --without-utilities --without-xml
+        make install -j2
+        popd
+        rm -rf ImageMagick
+
+    - name: Build
+      run: |
+        meson build -Dstatic=true
+        ninja -C build
+
+    - name: Upload a Build Artifact
+      uses: actions/upload-artifact@v2
+      with:
+        name: libimwri-${{matrix.env}}.dll
+        path: build/libimwri.dll
