@@ -5,6 +5,8 @@ project('IMWRI', 'cpp',
   version: '1'
 )
 
+add_project_arguments('-Wno-unused-parameter', language: 'cpp')
+
 vapoursynth_dep = dependency('vapoursynth').partial_dependency(compile_args: true, includes: true)
 
 deps = [
