@@ -657,12 +657,12 @@ static const VSFrame *VS_CC readGetFrame(int n, int activationReason, void *inst
             }
 
             VSVideoFormat fformat;
-            vsapi->queryVideoFormat(&fformat, cf, stInteger, depth, 0, 0, core);
+            vsapi->queryVideoFormat(&fformat, cf, st, depth, 0, 0, core);
             frame = vsapi->newVideoFrame(&fformat, width, height, nullptr, core);
 
             if (d->alpha) {
                 VSVideoFormat aformat;
-                vsapi->queryVideoFormat(&aformat, cfGray, stInteger, depth, 0, 0, core);
+                vsapi->queryVideoFormat(&aformat, cfGray, st, depth, 0, 0, core);
                 alphaFrame = vsapi->newVideoFrame(&aformat, width, height, nullptr, core);
             }
 
