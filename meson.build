@@ -14,6 +14,7 @@ vapoursynth_dep = dependency('vapoursynth', version: '>=55').partial_dependency(
 deps = [
   vapoursynth_dep,
   dependency('libheif', required: false, static: static),
+  dependency('libjxl', required: false, static: static),
   dependency('libtiff-4', required: false, static: static),
   dependency('Magick++', static: static, version: '>=7.0.0')
 ]
