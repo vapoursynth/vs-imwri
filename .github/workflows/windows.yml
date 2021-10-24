@@ -30,6 +30,7 @@ jobs:
           git
           mingw-w64-${{matrix.env}}-aom
           mingw-w64-${{matrix.env}}-cmake
+          mingw-w64-${{matrix.env}}-highway
           mingw-w64-${{matrix.env}}-lcms2
           mingw-w64-${{matrix.env}}-libde265
           mingw-w64-${{matrix.env}}-meson
@@ -50,8 +51,8 @@ jobs:
       run: |
         git clone https://github.com/AcademySoftwareFoundation/Imath.git --depth 1
         pushd Imath
-        cmake -S . -B building -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/${{matrix.sys}} -DIMATH_INSTALL_PKG_CONFIG=ON -G Ninja
-        ninja -C building install
+        cmake -S . -B build -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/${{matrix.sys}} -DIMATH_INSTALL_PKG_CONFIG=ON -G Ninja
+        ninja -C build install
         popd
         rm -rf Imath
 
@@ -66,12 +67,24 @@ jobs:
         rm -rf libheif
         cp /${{matrix.sys}}/include/libheif/heif.h /${{matrix.sys}}/include/heif.h
 
+    - name: Install libjxl
+      run: |
+        git clone https://github.com/libjxl/libjxl.git --depth 1
+        pushd libjxl
+        git submodule update --init --remote --depth 1 --recursive
+        cmake -S . -B build -DINSTALL_GTEST=OFF -DBUILD_GMOCK=OFF -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-DHWY_DISABLED_TARGETS=\"HWY_AVX2|HWY_AVX3\"" -DCMAKE_INSTALL_PREFIX=/${{matrix.sys}} -DJPEGXL_ENABLE_BENCHMARK=OFF -DJPEGXL_ENABLE_EXAMPLES=OFF -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_SJPEG=OFF -DJPEGXL_ENABLE_TOOLS=OFF -DJPEGXL_FORCE_SYSTEM_BROTLI=ON -DJPEGXL_FORCE_SYSTEM_HWY=ON -G Ninja
+        ninja -C build install
+        popd
+        rm -rf libjxl
+        mv /${{matrix.sys}}/lib/libjxl-static.a /${{matrix.sys}}/lib/libjxl.a
+        mv /${{matrix.sys}}/lib/libjxl_threads-static.a /${{matrix.sys}}/lib/libjxl_threads.a
+
     - name: Install libtiff
       run: |
         git clone https://gitlab.com/libtiff/libtiff.git --depth 1
         pushd libtiff
-        cmake -S . -B building -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/${{matrix.sys}} -Dlerc=OFF -G Ninja
-        ninja -C building install
+        cmake -S . -B build -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/${{matrix.sys}} -Dlerc=OFF -G Ninja
+        ninja -C build install
         popd
         rm -rf libtiff
 
@@ -79,8 +92,8 @@ jobs:
       run: |
         git clone https://github.com/AcademySoftwareFoundation/openexr.git --depth 1
         pushd openexr
-        cmake -S . -B building -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/${{matrix.sys}} -DOPENEXR_BUILD_TOOLS=OFF -DOPENEXR_INSTALL_EXAMPLES=OFF -DOPENEXR_INSTALL_PKG_CONFIG=ON -DOPENEXR_INSTALL_TOOLS=OFF -G Ninja
-        ninja -C building install
+        cmake -S . -B build -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/${{matrix.sys}} -DOPENEXR_BUILD_TOOLS=OFF -DOPENEXR_INSTALL_EXAMPLES=OFF -DOPENEXR_INSTALL_PKG_CONFIG=ON -DOPENEXR_INSTALL_TOOLS=OFF -G Ninja
+        ninja -C build install
         popd
         rm -rf openexr
 
@@ -88,7 +101,7 @@ jobs:
       run: |
         git clone https://github.com/ImageMagick/ImageMagick.git --depth 1
         pushd ImageMagick
-        ./configure --prefix=/${{matrix.sys}} --disable-shared --enable-hdri --disable-docs --without-utilities --without-xml
+        ./configure --prefix=/${{matrix.sys}} --disable-shared --enable-hdri --disable-docs --without-utilities --with-jxl --without-xml CPPFLAGS="-DJXL_STATIC_DEFINE -DJXL_THREADS_STATIC_DEFINE"
         make install -j2
         popd
         rm -rf ImageMagick
@@ -97,6 +110,7 @@ jobs:
       run: |
         meson build -Dstatic=true
         ninja -C build
+        strip build/libimwri.dll
 
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v2
