@@ -2,7 +2,7 @@ project('IMWRI', 'cpp',
   default_options: ['buildtype=release', 'warning_level=2', 'b_lto=true', 'b_ndebug=if-release', 'cpp_std=c++14'],
   license: 'LGPL-2.1-or-later',
   meson_version: '>=0.51.0',
-  version: '1'
+  version: '2'
 )
 
 add_project_arguments('-Wno-unused-parameter', language: 'cpp')
