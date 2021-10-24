@@ -110,6 +110,7 @@ jobs:
       run: |
         meson build -Dstatic=true
         ninja -C build
+        strip build/libimwri.dll
 
     - name: Upload a Build Artifact
       uses: actions/upload-artifact@v2
