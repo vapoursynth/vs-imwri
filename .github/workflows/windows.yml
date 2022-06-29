@@ -36,6 +36,10 @@ jobs:
           mingw-w64-${{matrix.env}}-meson
           mingw-w64-${{matrix.env}}-toolchain
           mingw-w64-${{matrix.env}}-zimg
+          mingw-w64-${{matrix.env}}-gflags
+          autoconf
+          automake
+          libtool
 
     - name: Install VapourSynth
       run: |
@@ -76,8 +80,8 @@ jobs:
         ninja -C build install
         popd
         rm -rf libjxl
-        mv /${{matrix.sys}}/lib/libjxl-static.a /${{matrix.sys}}/lib/libjxl.a
-        mv /${{matrix.sys}}/lib/libjxl_threads-static.a /${{matrix.sys}}/lib/libjxl_threads.a
+        mv /${{matrix.sys}}/lib/libjxl.a /${{matrix.sys}}/lib/libjxl.a
+        mv /${{matrix.sys}}/lib/libjxl_threads.a /${{matrix.sys}}/lib/libjxl_threads.a
 
     - name: Install libtiff
       run: |
