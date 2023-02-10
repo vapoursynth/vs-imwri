@@ -31,7 +31,7 @@ if host_machine.cpu_family().startswith('x86')
 endif
 
 if host_machine.system() == 'windows'
-  add_project_link_arguments('-lws2_32', language: 'cpp')
+  add_project_link_arguments('-lws2_32', '-lUrlmon', language: 'cpp')
 endif
 
 if static
