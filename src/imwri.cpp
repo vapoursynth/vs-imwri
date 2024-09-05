@@ -246,6 +246,101 @@ static void writeImageHelper(const VSFrame *frame, const VSFrame *alphaFrame, bo
     }
 }
 
+// for the WriteData argument, only `imgFormat`, `compressType`, `dither` and `quality` fields are referenced
+static Magick::Image frameToImage(const VSFrame *frame, const VSFrame *alphaFrame, const WriteData *d, const VSAPI *vsapi) {
+    const VSVideoFormat *fi = vsapi->getVideoFrameFormat(frame);
+    int width = vsapi->getFrameWidth(frame, 0);
+    int height = vsapi->getFrameHeight(frame, 0);
+
+    Magick::Image image(Magick::Geometry(width, height), Magick::Color(0, 0, 0, 0));
+    image.magick(d->imgFormat);
+    image.modulusDepth(fi->bitsPerSample);
+    if (d->compressType != MagickCore::UndefinedCompression)
+        image.compressType(d->compressType);
+    image.quantizeDitherMethod(Magick::FloydSteinbergDitherMethod);
+    image.quantizeDither(d->dither);
+    image.quality(d->quality);
+    image.alphaChannel(alphaFrame ? Magick::ActivateAlphaChannel : Magick::RemoveAlphaChannel);
+
+    bool isGray = fi->colorFamily == cfGray;
+    if (isGray)
+        image.colorSpace(Magick::GRAYColorspace);
+
+    if (fi->bytesPerSample == 4 && fi->sampleType == stFloat) {
+        image.attribute("quantum:format", "floating-point");
+        Magick::Pixels pixelCache(image);
+        const Quantum scaleFactor = QuantumRange;
+
+        const float * VS_RESTRICT r = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, 0));
+        const float * VS_RESTRICT g = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, isGray ? 0 : 1));
+        const float * VS_RESTRICT b = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, isGray ? 0 : 2));
+       
+        ptrdiff_t strideR = vsapi->getStride(frame, 0);
+        ptrdiff_t strideG = vsapi->getStride(frame, isGray ? 0 : 1);
+        ptrdiff_t strideB = vsapi->getStride(frame, isGray ? 0 : 2);
+            
+        ssize_t rOff = pixelCache.offset(MagickCore::RedPixelChannel);
+        ssize_t gOff = pixelCache.offset(MagickCore::GreenPixelChannel);
+        ssize_t bOff = pixelCache.offset(MagickCore::BluePixelChannel);
+        size_t channels = image.channels();
+
+        if (alphaFrame) {
+            const float * VS_RESTRICT a = reinterpret_cast<const float *>(vsapi->getReadPtr(alphaFrame, 0));
+            ptrdiff_t strideA = vsapi->getStride(alphaFrame, 0);
+            ssize_t aOff = pixelCache.offset(MagickCore::AlphaPixelChannel);
+    
+            for (int y = 0; y < height; y++) {
+                MagickCore::Quantum* pixels = pixelCache.get(0, y, width, 1);
+                for (int x = 0; x < width; x++) {
+                    pixels[x * channels + rOff] = r[x] * scaleFactor;
+                    pixels[x * channels + gOff] = g[x] * scaleFactor;
+                    pixels[x * channels + bOff] = b[x] * scaleFactor;
+                    pixels[x * channels + aOff] = a[x] * scaleFactor;
+                }
+
+                r += strideR / sizeof(float);
+                g += strideG / sizeof(float);
+                b += strideB / sizeof(float);
+                a += strideA / sizeof(float);
+
+                pixelCache.sync();
+            }
+        } else {
+            const float *r = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, 0));
+            const float *g = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, isGray ? 0 : 1));
+            const float *b = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, isGray ? 0 : 2));
+
+            for (int y = 0; y < height; y++) {
+                MagickCore::Quantum* pixels = pixelCache.get(0, y, width, 1);
+                for (int x = 0; x < width; x++) {
+                    pixels[x * channels + rOff] = r[x] * scaleFactor;
+                    pixels[x * channels + gOff] = g[x] * scaleFactor;
+                    pixels[x * channels + bOff] = b[x] * scaleFactor;
+                }
+
+                r += strideR / sizeof(float);
+                g += strideG / sizeof(float);
+                b += strideB / sizeof(float);
+
+                pixelCache.sync();
+            }
+        }
+    } else if (fi->bytesPerSample == 4) {
+        writeImageHelper<uint32_t>(frame, alphaFrame, isGray, image, width, height, fi->bitsPerSample, vsapi);
+    } else if (fi->bytesPerSample == 2) {
+        writeImageHelper<uint16_t>(frame, alphaFrame, isGray, image, width, height, fi->bitsPerSample, vsapi);
+    } else if (fi->bytesPerSample == 1) {
+        writeImageHelper<uint8_t>(frame, alphaFrame, isGray, image, width, height, fi->bitsPerSample, vsapi);
+    }
+
+    return image;
+}
+
+static inline bool frameDimsMatch(const VSFrame *a, const VSFrame *b, const VSAPI *vsapi) {
+    return vsapi->getFrameWidth(a, 0) == vsapi->getFrameWidth(b, 0) &&
+           vsapi->getFrameHeight(b, 0) == vsapi->getFrameHeight(b, 0);
+}
+
 static const VSFrame *VS_CC writeGetFrame(int n, int activationReason, void *instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
     WriteData *d = static_cast<WriteData *>(instanceData);
 
@@ -255,13 +350,7 @@ static const VSFrame *VS_CC writeGetFrame(int n, int activationReason, void *ins
             vsapi->requestFrameFilter(n, d->alphaNode, frameCtx);
     } else if (activationReason == arAllFramesReady) {
         const VSFrame *frame = vsapi->getFrameFilter(n, d->videoNode, frameCtx);
-        const VSVideoFormat *fi = vsapi->getVideoFrameFormat(frame);
-        int width = vsapi->getFrameWidth(frame, 0);
-        int height = vsapi->getFrameHeight(frame, 0);
-
         const VSFrame *alphaFrame = nullptr;
-        int alphaWidth = 0;
-        int alphaHeight = 0;
 
         std::string filename = specialPrintf(d->filename, n + d->firstNum);
         if (!isAbsolute(filename))
@@ -272,10 +361,8 @@ static const VSFrame *VS_CC writeGetFrame(int n, int activationReason, void *ins
 
         if (d->alphaNode) {
             alphaFrame = vsapi->getFrameFilter(n, d->alphaNode, frameCtx);
-            alphaWidth = vsapi->getFrameWidth(alphaFrame, 0);
-            alphaHeight = vsapi->getFrameHeight(alphaFrame, 0);
 
-            if (width != alphaWidth || height != alphaHeight) {
+            if (!frameDimsMatch(frame, alphaFrame, vsapi)) {
                 vsapi->setFilterError("Write: Mismatched dimension of the alpha clip", frameCtx);
                 vsapi->freeFrame(frame);
                 vsapi->freeFrame(alphaFrame);
@@ -284,89 +371,8 @@ static const VSFrame *VS_CC writeGetFrame(int n, int activationReason, void *ins
         }
 
         try {
-            Magick::Image image(Magick::Geometry(width, height), Magick::Color(0, 0, 0, 0));
-            image.magick(d->imgFormat);
-            image.modulusDepth(fi->bitsPerSample);
-            if (d->compressType != MagickCore::UndefinedCompression)
-                image.compressType(d->compressType);
-            image.quantizeDitherMethod(Magick::FloydSteinbergDitherMethod);
-            image.quantizeDither(d->dither);
-            image.quality(d->quality);
-            image.alphaChannel(alphaFrame ? Magick::ActivateAlphaChannel : Magick::RemoveAlphaChannel);
-
-            bool isGray = fi->colorFamily == cfGray;
-            if (isGray)
-                image.colorSpace(Magick::GRAYColorspace);
-
-            if (fi->bytesPerSample == 4 && fi->sampleType == stFloat) {
-                image.attribute("quantum:format", "floating-point");
-                Magick::Pixels pixelCache(image);
-                const Quantum scaleFactor = QuantumRange;
-
-                const float * VS_RESTRICT r = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, 0));
-                const float * VS_RESTRICT g = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, isGray ? 0 : 1));
-                const float * VS_RESTRICT b = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, isGray ? 0 : 2));
-               
-                ptrdiff_t strideR = vsapi->getStride(frame, 0);
-                ptrdiff_t strideG = vsapi->getStride(frame, isGray ? 0 : 1);
-                ptrdiff_t strideB = vsapi->getStride(frame, isGray ? 0 : 2);
-                    
-                ssize_t rOff = pixelCache.offset(MagickCore::RedPixelChannel);
-                ssize_t gOff = pixelCache.offset(MagickCore::GreenPixelChannel);
-                ssize_t bOff = pixelCache.offset(MagickCore::BluePixelChannel);
-                size_t channels = image.channels();
-
-                if (alphaFrame) {
-                    const float * VS_RESTRICT a = reinterpret_cast<const float *>(vsapi->getReadPtr(alphaFrame, 0));
-                    ptrdiff_t strideA = vsapi->getStride(alphaFrame, 0);
-                    ssize_t aOff = pixelCache.offset(MagickCore::AlphaPixelChannel);
-            
-                    for (int y = 0; y < height; y++) {
-                        MagickCore::Quantum* pixels = pixelCache.get(0, y, width, 1);
-                        for (int x = 0; x < width; x++) {
-                            pixels[x * channels + rOff] = r[x] * scaleFactor;
-                            pixels[x * channels + gOff] = g[x] * scaleFactor;
-                            pixels[x * channels + bOff] = b[x] * scaleFactor;
-                            pixels[x * channels + aOff] = a[x] * scaleFactor;
-                        }
-
-                        r += strideR / sizeof(float);
-                        g += strideG / sizeof(float);
-                        b += strideB / sizeof(float);
-                        a += strideA / sizeof(float);
-
-                        pixelCache.sync();
-                    }
-                } else {
-                    const float *r = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, 0));
-                    const float *g = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, isGray ? 0 : 1));
-                    const float *b = reinterpret_cast<const float *>(vsapi->getReadPtr(frame, isGray ? 0 : 2));
-
-                    for (int y = 0; y < height; y++) {
-                        MagickCore::Quantum* pixels = pixelCache.get(0, y, width, 1);
-                        for (int x = 0; x < width; x++) {
-                            pixels[x * channels + rOff] = r[x] * scaleFactor;
-                            pixels[x * channels + gOff] = g[x] * scaleFactor;
-                            pixels[x * channels + bOff] = b[x] * scaleFactor;
-                        }
-
-                        r += strideR / sizeof(float);
-                        g += strideG / sizeof(float);
-                        b += strideB / sizeof(float);
-
-                        pixelCache.sync();
-                    }
-                }
-            } else if (fi->bytesPerSample == 4) {
-                writeImageHelper<uint32_t>(frame, alphaFrame, isGray, image, width, height, fi->bitsPerSample, vsapi);
-            } else if (fi->bytesPerSample == 2) {
-                writeImageHelper<uint16_t>(frame, alphaFrame, isGray, image, width, height, fi->bitsPerSample, vsapi);
-            } else if (fi->bytesPerSample == 1) {
-                writeImageHelper<uint8_t>(frame, alphaFrame, isGray, image, width, height, fi->bitsPerSample, vsapi);
-            }
-
+            auto image = frameToImage(frame, alphaFrame, d, vsapi);
             image.strip();
-
             image.write(filename);
 
             vsapi->freeFrame(alphaFrame);
@@ -389,25 +395,13 @@ static void VS_CC writeFree(void *instanceData, VSCore *core, const VSAPI *vsapi
     delete d;
 }
 
-static void VS_CC writeCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi) {
-    std::unique_ptr<WriteData> d(new WriteData());
+static const char* fillWriteDataFromMap(const VSMap *in, std::unique_ptr<WriteData> &d, const VSAPI *vsapi) {
     int err = 0;
-
-    initMagick(core, vsapi);
-
-    d->firstNum = vsapi->mapGetIntSaturated(in, "firstnum", 0, &err);
-    if (d->firstNum < 0) {
-        vsapi->mapSetError(out, "Write: Frame number offset can't be negative");
-        return;
-    }
-
     d->quality = vsapi->mapGetIntSaturated(in, "quality", 0, &err);
     if (err)
         d->quality = 75;
-    if (d->quality < 0 || d->quality > 100) {
-        vsapi->mapSetError(out, "Write: Quality must be between 0 and 100");
-        return;
-    }
+    if (d->quality < 0 || d->quality > 100)
+        return "Quality must be between 0 and 100";
 
     const char *compressType = vsapi->mapGetData(in, "compression_type", 0, &err);
     if (!err) {
@@ -458,9 +452,34 @@ static void VS_CC writeCreate(const VSMap *in, VSMap *out, void *userData, VSCor
         else if (s == "JBIG2")
             d->compressType = MagickCore::JBIG2Compression;
         else {
-            vsapi->mapSetError(out, "Write: Unrecognized compression type");
-            return;
+            return "Unrecognized compression type";
         }
+    }
+
+    d->imgFormat = vsapi->mapGetData(in, "imgformat", 0, nullptr);
+    d->dither = !!vsapi->mapGetInt(in, "dither", 0, &err);
+    if (err)
+        d->dither = true;
+
+    return nullptr;
+}
+
+static void VS_CC writeCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi) {
+    std::unique_ptr<WriteData> d(new WriteData());
+    int err = 0;
+
+    initMagick(core, vsapi);
+
+    const char *errMsg = fillWriteDataFromMap(in, d, vsapi);
+    if (errMsg) {
+        vsapi->mapSetError(out, (std::string("Write: ") + errMsg).c_str());
+        return;
+    }
+
+    d->firstNum = vsapi->mapGetIntSaturated(in, "firstnum", 0, &err);
+    if (d->firstNum < 0) {
+        vsapi->mapSetError(out, "Write: Frame number offset can't be negative");
+        return;
     }
 
     d->videoNode = vsapi->mapGetNode(in, "clip", 0, nullptr);
@@ -474,11 +493,7 @@ static void VS_CC writeCreate(const VSMap *in, VSMap *out, void *userData, VSCor
     }
 
     d->alphaNode = vsapi->mapGetNode(in, "alpha", 0, &err);
-    d->imgFormat = vsapi->mapGetData(in, "imgformat", 0, nullptr);
     d->filename = vsapi->mapGetData(in, "filename", 0, nullptr);
-    d->dither = !!vsapi->mapGetInt(in, "dither", 0, &err);
-    if (err)
-        d->dither = true;
     d->overwrite = !!vsapi->mapGetInt(in, "overwrite", 0, &err);
 
     d->vi = vsapi->getVideoInfo(d->videoNode);
@@ -510,6 +525,62 @@ static void VS_CC writeCreate(const VSMap *in, VSMap *out, void *userData, VSCor
     VSFilterDependency deps[] = {{ d->videoNode, rpStrictSpatial }, { d->alphaNode, rpStrictSpatial }};
     vsapi->createVideoFilter(out, "Write", d->vi, writeGetFrame, writeFree, fmParallelRequests, deps, d->alphaNode ? 2 : 1, d.get(), core);
     d.release();
+}
+
+static void VS_CC encodeFrame(const VSMap *in, VSMap *out, void *, VSCore *core, const VSAPI *vsapi) {
+    std::unique_ptr<WriteData> d(new WriteData());
+    int err = 0;
+
+    initMagick(core, vsapi);
+
+    const char *errMsg = fillWriteDataFromMap(in, d, vsapi);
+    if (errMsg) {
+        vsapi->mapSetError(out, (std::string("EncodeFrame: ") + errMsg).c_str());
+        return;
+    }
+
+    const VSFrame *frame = vsapi->mapGetFrame(in, "frame", 0, nullptr);
+    const VSVideoFormat *fi = vsapi->getVideoFrameFormat(frame);
+
+    if ((fi->colorFamily != cfRGB && fi->colorFamily != cfGray)
+        || (fi->sampleType == stFloat && fi->bitsPerSample != 32))
+    {
+        vsapi->freeFrame(frame);
+        vsapi->mapSetError(out, "EncodeFrame: Only constant format 8-32 bit integer or float RGB and Grayscale input supported");
+        return;
+    }
+
+    const VSFrame *alpha = vsapi->mapGetFrame(in, "alpha", 0, &err);
+
+    if (alpha) {
+        const VSVideoFormat *alphaFi = vsapi->getVideoFrameFormat(alpha);
+
+        if (!frameDimsMatch(frame, alpha, vsapi) ||
+            alphaFi->colorFamily == cfUndefined ||
+            !vsh::isSameVideoFormat(fi, alphaFi)) {
+            vsapi->freeFrame(frame);
+            vsapi->freeFrame(alpha);
+            vsapi->mapSetError(out, "EncodeFrame: Alpha frame dimensions and format don't match the main frame");
+            return;
+        }
+    }
+
+    Magick::Blob data;
+    try {
+        auto image = frameToImage(frame, alpha, d.get(), vsapi);
+        image.strip();
+        image.write(&data);
+    } catch (Magick::Exception &e) {
+        vsapi->mapSetError(out, (std::string("EncodeFrame: ImageMagick error: ") + e.what()).c_str());
+        vsapi->freeFrame(frame);
+        vsapi->freeFrame(alpha);
+        return;
+    }
+
+    vsapi->freeFrame(frame);
+    vsapi->freeFrame(alpha);
+
+    vsapi->mapSetData(out, "bytes", static_cast<const char*>(data.data()), data.length(), dtBinary, maReplace);
 }
 
 //////////////////////////////////////////
@@ -842,4 +913,5 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin *plugin, const VSPLUGINAPI
     vspapi->configPlugin(IMWRI_ID, IMWRI_NAMESPACE, IMWRI_PLUGIN_NAME, VS_MAKE_VERSION(2, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
     vspapi->registerFunction("Write", "clip:vnode;imgformat:data;filename:data;firstnum:int:opt;quality:int:opt;dither:int:opt;compression_type:data:opt;overwrite:int:opt;alpha:vnode:opt;", "clip:vnode;", writeCreate, nullptr, plugin);
     vspapi->registerFunction("Read", "filename:data[];firstnum:int:opt;mismatch:int:opt;alpha:int:opt;float_output:int:opt;embed_icc:int:opt;", "clip:vnode;", readCreate, nullptr, plugin);
+    vspapi->registerFunction("EncodeFrame", "frame:vframe;imgformat:data;quality:int:opt;dither:int:opt;compression_type:data:opt;alpha:vframe:opt;", "bytes:data;", encodeFrame, nullptr, plugin);
 }
